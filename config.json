@@ -1,0 +1,58 @@
+{
+    "top_hint": false,
+    "auto_load": true,
+    "auto_play": true,
+    "volume": 100,
+    "shortcuts": {
+        "previous": [
+            "Left",
+            "A"
+        ],
+        "play": [
+            "Space"
+        ],
+        "next": [
+            "Right",
+            "D"
+        ],
+        "plus": [
+            "Up",
+            "W"
+        ],
+        "minus": [
+            "Down",
+            "S"
+        ],
+        "stop": [
+            "T"
+        ],
+        "repeat": [
+            "R"
+        ],
+        "settings": [
+            "Ctrl+E"
+        ],
+        "open": [
+            "Ctrl+O"
+        ],
+        "new": [
+            "Ctrl+N"
+        ],
+        "save": [
+            "Ctrl+S"
+        ],
+        "close": [
+            "Ctrl+Q"
+        ],
+        "delete": [
+            "Ctrl+Delete"
+        ],
+        "add": [
+            "Insert"
+        ],
+        "remove": [
+            "Delete"
+        ]
+    },
+    "playlists": {}
+}
