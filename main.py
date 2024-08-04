@@ -6,11 +6,14 @@ from PyQt6.QtWidgets import *
 from PyQt6.QtCore import *
 from PyQt6.QtMultimedia import *
 
+from librosa import load, amplitude_to_db
+import numpy as np
+
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
-VERSION = '0.1.0'
+VERSION = '0.1.1'
 
 with open('config.json', encoding='utf-8') as config_file:
     config = json.load(config_file)
@@ -31,9 +34,8 @@ def mseconds_to_time(mseconds):
 
 
 class Playlist(QAbstractTableModel):
-    def __init__(self, parent, *args, **kwargs):
-        super().__init__(parent, *args, **kwargs)
-        self.parent = parent
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
         self._data = []
         self._header = ['N', 'Name']
         self.current = 0
@@ -69,7 +71,7 @@ class Playlist(QAbstractTableModel):
         self.beginInsertRows(parent, row, row + count - 1)
         for i in range(count):
             self._data.insert(row + i, value[i])
-            config['playlists'][self.parent.parent.playlist_name].insert(
+            config['playlists'][config['current_playlist']].insert(
                 row + i, (lambda u: u[0].upper() + u[1:])(value[i].url()))
         self.endInsertRows()
 
@@ -77,7 +79,7 @@ class Playlist(QAbstractTableModel):
         self.beginRemoveRows(parent, row, row + count - 1)
         for i in range(count - 1, -1, -1):
             self._data.pop(row + i)
-            config['playlists'][self.parent.parent.playlist_name].pop(row + i)
+            config['playlists'][config['current_playlist']].pop(row + i)
         self.endRemoveRows()
 
     def removeRow(self, row, parent=QModelIndex()):
@@ -167,14 +169,14 @@ class Settings(QDialog):
         super().__init__(parent=parent)
         self.parent = parent
         self.setWindowTitle('Settings')
+        self.setWindowModality(Qt.WindowModality.ApplicationModal)
 
         self.lay = QVBoxLayout()
         self.setLayout(self.lay)
 
         self.top_hint = QCheckBox('Top hint', self)
         self.top_hint.setChecked(config['top_hint'])
-        self.top_hint.clicked.connect(
-            lambda: self.parent.setWindowFlags(Qt.WindowType.WindowStaysOnTopHint, self.top_hint.isChecked()))
+        self.top_hint.clicked.connect(self.top_hint_checked)
         self.lay.addWidget(self.top_hint)
 
         self.auto_load = QCheckBox('Auto load', self)
@@ -201,6 +203,13 @@ class Settings(QDialog):
             self.short_cuts.setItem(i, 1, QTableWidgetItem(','.join(config['shortcuts'][keys[i]])))
             self.short_cuts.item(i, 0).setFlags(self.short_cuts.item(i, 0).flags() ^ Qt.ItemFlag.ItemIsEditable)
         self.short_cuts.itemChanged.connect(self.update_short_cuts)
+
+    def top_hint_checked(self):
+        config['top_hint'] = self.auto_load.isChecked()
+        self.close()
+        self.parent.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.top_hint.isChecked())
+        self.parent.show()
+        self.show()
 
     def auto_load_checked(self):
         config['auto_load'] = self.auto_load.isChecked()
@@ -428,6 +437,52 @@ class Progress(QDockWidget):
         self.duration.setText(mseconds_to_time(tm))
 
 
+class AudioVisualization(QDockWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.parent = parent
+        self.setWindowTitle('Visualization')
+        self.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea)
+        self.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable | QDockWidget.DockWidgetFeature.DockWidgetClosable)
+        self.setMinimumWidth(80)
+        self.setMaximumWidth(120)
+
+        self.wgt = QWidget(self)
+        self.wgtlay = QHBoxLayout()
+        self.wgt.setLayout(self.wgtlay)
+        self.setWidget(self.wgt)
+
+        self.value_left = QProgressBar(self)
+        self.value_left.setOrientation(Qt.Orientation.Vertical)
+        self.value_left.setRange(-60, 0)
+        self.wgtlay.addWidget(self.value_left)
+
+        self.value_right = QProgressBar(self)
+        self.value_right.setOrientation(Qt.Orientation.Vertical)
+        self.value_right.setRange(-60, 0)
+        self.wgtlay.addWidget(self.value_right)
+
+        self.parent.player.sourceChanged.connect(self.set_data)
+        self.parent.player.positionChanged.connect(self.update_data)
+
+    def update_data(self, pos):
+        try:
+            self.value_left.setValue(int(self.data_left[pos]))
+            self.value_right.setValue(int(self.data_right[pos]))
+        except Exception:
+            self.value_left.setValue(-60)
+            self.value_right.setValue(-60)
+
+    def set_data(self):
+        try:
+            data, sample_rate = load(self.parent.player.source().url(), sr=None, mono=False)
+        except Exception:
+            data, sample_rate = [[0], [0]], 1000
+        self.data_left = amplitude_to_db(data[0][::sample_rate // 1000])
+        self.data_right = amplitude_to_db(data[1][::sample_rate // 1000])
+
+
 class MediaInfo(QDockWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
@@ -473,7 +528,6 @@ class MainWindow(QMainWindow):
         self.player.mediaStatusChanged.connect(self.media_status)
 
         self.is_repeat = False
-        self.playlist_name = ''
 
         self.settings = Settings(self)
         self.menu = Actions(self)
@@ -482,6 +536,7 @@ class MainWindow(QMainWindow):
         self.table = PlaylistWidget(self)
         self.progress_bar = Progress(self)
         self.info = MediaInfo(self)
+        self.visualize = AudioVisualization(self)
 
         self.volume_pr = VolumeSlider(self)
         self.volume_pr.slider.setValue(config['volume'])
@@ -491,14 +546,17 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.volume_sys)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.volume_pr)
         self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.table)
+        self.addDockWidget(Qt.DockWidgetArea.TopDockWidgetArea, self.visualize)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.info)
         self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, self.progress_bar)
+
+        self.load_playlist(config['current_playlist'])
 
     def add_song(self, song):
         self.table.add_item(song)
 
     def load_playlist(self, playlist_name):
-        self.playlist_name = playlist_name
+        config['current_playlist'] = playlist_name
         self.table.model.clear_all_data()
         if playlist_name != '~buffer~':
             for song in config['playlists'][playlist_name]:
@@ -544,18 +602,19 @@ class MainWindow(QMainWindow):
                 self.play_new()
             elif config['auto_load'] and self.table.model.rowCount():
                 self.table.change_song(1)
+                self.player.setSource(self.table.get_song())
 
     def open_songs(self):
         files, _ = QFileDialog.getOpenFileNames(self, 'Add Songs', '/',
-                                                'Supported media files(*.mp3 *.vaw *.mp4);;All Files (*.*)')
+                                                'Supported media files(*.mp3 *.wav);;All Files (*.*)')
         if files:
             for file in files:
                 self.add_song(file)
-                config['playlists'][self.playlist_name].append(file)
+                config['playlists'][config['current_playlist']].append(file)
 
     def delete_song(self):
         for song in sorted(self.table.table.selectionModel().selectedRows(), reverse=True):
-            config['playlists'][self.playlist_name].remove(
+            config['playlists'][config['current_playlist']].remove(
                 (lambda u: u[0].upper() + u[1:])(self.table.model.get_url(song.row()).url()))
             self.table.model.removeRow(song.row())
 
@@ -583,8 +642,8 @@ class MainWindow(QMainWindow):
         self.load_playlist('~buffer~')
 
     def delete_playlist(self):
-        if self.playlist_name != '~buffer~':
-            del config['playlists'][self.playlist_name]
+        if config['current_playlist'] != '~buffer~':
+            del config['playlists'][config['current_playlist']]
             save_config()
 
     def dragEnterEvent(self, a0):
@@ -594,17 +653,15 @@ class MainWindow(QMainWindow):
     def dropEvent(self, a0):
         for url in map(lambda u: u.url().replace('file:///', ''), a0.mimeData().urls()):
             self.add_song(url)
-            config['playlists'][self.playlist_name].append(url)
+            config['playlists'][config['current_playlist']].append(url)
 
     def closeEvent(self, event):
         config['volume'] = self.volume_pr.slider.value()
         save_config()
-        sys.exit()
 
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.load_playlist('test_p')
     window.show()
     sys.exit(app.exec())

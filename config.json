@@ -1,8 +1,8 @@
 {
-    "top_hint": false,
+    "top_hint": true,
     "auto_load": true,
     "auto_play": true,
-    "volume": 100,
+    "volume": 50,
     "shortcuts": {
         "previous": [
             "Left",
@@ -54,5 +54,6 @@
             "Delete"
         ]
     },
-    "playlists": {}
+    "playlists": {},
+    "current_playlist": "~buffer~"
 }
