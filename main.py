@@ -13,7 +13,7 @@ from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
-VERSION = '0.1.1'
+VERSION = '0.1.2'
 
 with open('config.json', encoding='utf-8') as config_file:
     config = json.load(config_file)
@@ -33,11 +33,16 @@ def mseconds_to_time(mseconds):
     return hh + ':' + mm + ':' + ss if hh != '00' else mm + ':' + ss
 
 
+def qurl_to_string(qurl):
+    return qurl[0].upper() + qurl[1:]
+
+
 class Playlist(QAbstractTableModel):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self._data = []
-        self._header = ['N', 'Name']
+        self._notes = []
+        self._header = ['№', 'Name', 'Notes']
         self.current = 0
 
     def rowCount(self, parent=None):
@@ -52,13 +57,17 @@ class Playlist(QAbstractTableModel):
                 return index.row() + 1
             elif index.column() == 1:
                 return self._data[index.row()].fileName()
+            elif index.column() == 2:
+                return self._notes[index.row()]
             return None
         elif role == Qt.ItemDataRole.BackgroundRole and index.row() == self.current:
             return QBrush(QColor(225, 120, 0))
 
     def setData(self, index, value, role):
         if role == Qt.ItemDataRole.EditRole:
-            self._data[index.row()] = value
+            config['playlists'][config['current_playlist']][index.row()] = (
+                    qurl_to_string(self._data[index.row()].url()) + '|' + value)
+            self._notes[index.row()] = value
             self.dataChanged.emit(index, index)
             return True
         return False
@@ -67,12 +76,13 @@ class Playlist(QAbstractTableModel):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
             return self._header[section]
 
-    def insert_rows(self, row, count, value=None, parent=QModelIndex()):
+    def insert_rows(self, row, count, value=None, notes=None, parent=QModelIndex()):
         self.beginInsertRows(parent, row, row + count - 1)
         for i in range(count):
             self._data.insert(row + i, value[i])
+            self._notes.index(row + i, notes[i])
             config['playlists'][config['current_playlist']].insert(
-                row + i, (lambda u: u[0].upper() + u[1:])(value[i].url()))
+                row + i, qurl_to_string(value[i].url()) + '|' + notes[i])
         self.endInsertRows()
 
     def remove_rows(self, row, count, parent=QModelIndex()):
@@ -88,6 +98,9 @@ class Playlist(QAbstractTableModel):
         self.endRemoveRows()
 
     def flags(self, index):
+        if index.column() == 2:
+            return (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled |
+                    Qt.ItemFlag.ItemIsDropEnabled | Qt.ItemFlag.ItemIsEditable)
         return (Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable | Qt.ItemFlag.ItemIsDragEnabled |
                 Qt.ItemFlag.ItemIsDropEnabled)
 
@@ -96,17 +109,19 @@ class Playlist(QAbstractTableModel):
 
     def mimeData(self, indexes):
         mimedata = QMimeData()
-        b = bytearray('|'.join([self._data[i.row()].url() for i in indexes[::2]]).encode())
+        b = bytearray('*'.join([self._data[i.row()].url() + '|' + self._notes[i.row()] for i in indexes[::2]]).encode())
         mimedata.setData('text', b)
         return mimedata
 
     def dropMimeData(self, mimedata, action, row, col, parent):
         if action == Qt.DropAction.CopyAction:
-            drop_data = mimedata.data('text').split(b'|')
-            item_list = [QUrl(b.data().decode()) for b in drop_data]
+            drop_data = mimedata.data('text').split(b'*')
+            item_list = [b.data().decode() for b in drop_data]
             position = self._data.index(item_list[-1]) if item_list[-1] in self._data else 0
             self.remove_rows(position, len(item_list))
-            self.insert_rows(parent.row(), len(item_list), item_list)
+            data_list = [QUrl(item.split('|')[0]) for item in item_list]
+            notes_list = [item.split('|')[1] for item in item_list]
+            self.insert_rows(parent.row(), len(item_list), data_list, notes_list)
             save_config()
             return True
 
@@ -117,8 +132,12 @@ class Playlist(QAbstractTableModel):
     def get_url(self, index):
         return self._data[index]
 
-    def new_row(self, value_url: QUrl):
+    def get_data(self, index):
+        return qurl_to_string(self._data[index].url()) + '|' + self._notes[index]
+
+    def new_row(self, value_url, value_notes):
         self._data.append(value_url)
+        self._notes.append(value_notes)
         self.layoutChanged.emit()
 
 
@@ -129,7 +148,6 @@ class PlaylistWidget(QDockWidget):
         self.setWindowTitle('Playlist')
 
         self.table = QTableView(self)
-        self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
         self.table.setDragDropOverwriteMode(False)
         self.table.setDragEnabled(True)
@@ -143,13 +161,17 @@ class PlaylistWidget(QDockWidget):
 
         self.model = Playlist(self)
         self.table.setModel(self.model)
+        self.table.setColumnWidth(0, 30)
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
 
         self.setWidget(self.table)
         self.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea)
         self.setFeatures(QDockWidget.DockWidgetFeature.DockWidgetMovable)
 
-    def add_item(self, url):
-        self.model.new_row(QUrl(url))
+    def add_item(self, data):
+        url, notes = data.split('|')
+        self.model.new_row(QUrl(url), notes)
 
     def change_song(self, x):
         self.model.current = (self.model.current + x) % self.model.rowCount()
@@ -189,6 +211,10 @@ class Settings(QDialog):
         self.auto_play.clicked.connect(self.auto_play_checked)
         self.lay.addWidget(self.auto_play)
 
+        self.docks_movable = QCheckBox('Docks movable', self)
+        self.docks_movable.clicked.connect(self.docks_movable_checked)
+        self.lay.addWidget(self.docks_movable)
+
         self.short_cuts = QTableWidget(15, 2, self)
         self.short_cuts.verticalHeader().setVisible(False)
         self.short_cuts.setHorizontalHeaderLabels(['Action', 'Shortcut'])
@@ -210,6 +236,7 @@ class Settings(QDialog):
         self.parent.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, self.top_hint.isChecked())
         self.parent.show()
         self.show()
+        save_config()
 
     def auto_load_checked(self):
         config['auto_load'] = self.auto_load.isChecked()
@@ -218,6 +245,10 @@ class Settings(QDialog):
     def auto_play_checked(self):
         config['auto_play'] = self.auto_play.isChecked()
         save_config()
+
+    def docks_movable_checked(self):
+        for dock in self.parent.findChildren(QDockWidget):
+            dock.setFeatures(dock.features() ^ QDockWidget.DockWidgetFeature.DockWidgetFloatable)
 
     def update_short_cuts(self, sc: QTableWidgetItem):
         sc_name = self.short_cuts.item(sc.row(), 0).text()
@@ -383,6 +414,7 @@ class SystemVolumeSlider(VolumeSlider):
 class Progress(QDockWidget):
     def __init__(self, parent=None):
         super().__init__(parent=parent)
+        self.setWindowTitle('Not media loaded')
         self.parent = parent
         self.setMinimumHeight(60)
 
@@ -519,7 +551,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle('Vaudio v%s' % VERSION)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, config['top_hint'])
         self.setDockOptions(QMainWindow.DockOption.AnimatedDocks)
-        self.setMinimumSize(500, 300)
+        self.setMinimumSize(600, 300)
 
         self.player = QMediaPlayer()
         self.audio = QAudioOutput()
@@ -562,7 +594,7 @@ class MainWindow(QMainWindow):
             for song in config['playlists'][playlist_name]:
                 self.add_song(song)
             if config['auto_load'] and self.table.model.rowCount():
-                self.player.setSource(QUrl(config['playlists'][playlist_name][0]))
+                self.player.setSource(QUrl(config['playlists'][playlist_name][0].split('|')[0]))
             self.table.setWindowTitle('Playlist ' + playlist_name)
         else:
             self.table.setWindowTitle('Buffer mode')
@@ -609,13 +641,12 @@ class MainWindow(QMainWindow):
                                                 'Supported media files(*.mp3 *.wav);;All Files (*.*)')
         if files:
             for file in files:
-                self.add_song(file)
-                config['playlists'][config['current_playlist']].append(file)
+                self.add_song(file + '|')
+                config['playlists'][config['current_playlist']].append(file + '|')
 
     def delete_song(self):
         for song in sorted(self.table.table.selectionModel().selectedRows(), reverse=True):
-            config['playlists'][config['current_playlist']].remove(
-                (lambda u: u[0].upper() + u[1:])(self.table.model.get_url(song.row()).url()))
+            config['playlists'][config['current_playlist']].remove(self.table.model.get_data(song.row()))
             self.table.model.removeRow(song.row())
 
     def new_playlist(self):
@@ -652,8 +683,8 @@ class MainWindow(QMainWindow):
 
     def dropEvent(self, a0):
         for url in map(lambda u: u.url().replace('file:///', ''), a0.mimeData().urls()):
-            self.add_song(url)
-            config['playlists'][config['current_playlist']].append(url)
+            self.add_song(url + '|')
+            config['playlists'][config['current_playlist']].append(url + '|')
 
     def closeEvent(self, event):
         config['volume'] = self.volume_pr.slider.value()
