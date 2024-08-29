@@ -7,13 +7,12 @@ from PyQt6.QtCore import *
 from PyQt6.QtMultimedia import *
 
 from librosa import load, amplitude_to_db
-import numpy as np
 
 from ctypes import cast, POINTER
 from comtypes import CLSCTX_ALL
 from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 
-VERSION = '0.1.2'
+VERSION = '0.1.3'
 
 with open('config.json', encoding='utf-8') as config_file:
     config = json.load(config_file)
@@ -163,7 +162,7 @@ class PlaylistWidget(QDockWidget):
         self.table.setModel(self.model)
         self.table.setColumnWidth(0, 30)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
 
         self.setWidget(self.table)
         self.setAllowedAreas(Qt.DockWidgetArea.TopDockWidgetArea)
