@@ -79,7 +79,7 @@ class Playlist(QAbstractTableModel):
         self.beginInsertRows(parent, row, row + count - 1)
         for i in range(count):
             self._data.insert(row + i, value[i])
-            self._notes.index(row + i, notes[i])
+            self._notes.insert(row + i, notes[i])
             config['playlists'][config['current_playlist']].insert(
                 row + i, qurl_to_string(value[i].url()) + '|' + notes[i])
         self.endInsertRows()
